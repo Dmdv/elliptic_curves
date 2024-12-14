@@ -55,12 +55,11 @@ Example:
 """
 
 import hashlib
-import hmac
-from typing import Tuple, List
+from typing import Tuple
 import base58
 import random
-
-# Rest of the code...
+import bech32
+import hmac
 
 class BitcoinKeys:
     """Bitcoin Key Management and Address Generation"""
@@ -167,46 +166,6 @@ class BitcoinKeys:
         # Uncompressed public key format
         return b'\x04' + point[0].to_bytes(32, 'big') + point[1].to_bytes(32, 'big')
 
-    def public_to_address(self, public_key: bytes, testnet: bool = False) -> str:
-        """
-        Convert a public key to a Bitcoin address.
-
-        Args:
-            public_key (bytes): The public key in uncompressed format (65 bytes).
-            testnet (bool, optional): Whether to generate a testnet address. Defaults to False.
-
-        Returns:
-            str: The Bitcoin address as a Base58Check encoded string.
-        """
-        # SHA256 of public key
-        sha256_hash = hashlib.sha256(public_key).digest()
-
-        # RIPEMD160 of SHA256
-        ripemd160_hash = hashlib.new('ripemd160')
-        ripemd160_hash.update(sha256_hash)
-        hash160 = ripemd160_hash.digest()
-
-        # Add version byte (0x00 for mainnet, 0x6F for testnet)
-        version = b'\x6f' if testnet else b'\x00'
-        versioned_hash = version + hash160
-
-        # Double SHA256 for checksum
-        double_sha256 = hashlib.sha256(
-            hashlib.sha256(versioned_hash).digest()
-        ).digest()
-
-        # First 4 bytes of double SHA256 as checksum
-        checksum = double_sha256[:4]
-
-        # Concatenate versioned hash and checksum
-        binary_address = versioned_hash + checksum
-
-        # Base58 encode
-        address = base58.b58encode(binary_address).decode('utf-8')
-
-        return address
-
-
 class HDWallet:
     """Hierarchical Deterministic Wallet Implementation"""
 
@@ -288,6 +247,191 @@ class HDWallet:
 
         return key, chain
 
+def public_to_address(public_key: bytes, testnet: bool = False) -> str:
+    """
+    Convert a public key to a Bitcoin address.
+
+    Args:
+        public_key (bytes): The public key in uncompressed format (65 bytes).
+        testnet (bool, optional): Whether to generate a testnet address. Defaults to False.
+
+    Returns:
+        str: The Bitcoin address as a Base58Check encoded string.
+    """
+    # SHA256 of public key
+    sha256_hash = hashlib.sha256(public_key).digest()
+
+    # RIPEMD160 of SHA256
+    ripemd160_hash = hashlib.new('ripemd160')
+    ripemd160_hash.update(sha256_hash)
+    hash160 = ripemd160_hash.digest()
+
+    # Add version byte (0x00 for mainnet, 0x6F for testnet)
+    version = b'\x6f' if testnet else b'\x00'
+    versioned_hash = version + hash160
+
+    # Double SHA256 for checksum
+    double_sha256 = hashlib.sha256(
+        hashlib.sha256(versioned_hash).digest()
+    ).digest()
+
+    # First 4 bytes of double SHA256 as checksum
+    checksum = double_sha256[:4]
+
+    # Concatenate versioned hash and checksum
+    binary_address = versioned_hash + checksum
+
+    # Base58 encode
+    address = base58.b58encode(binary_address).decode('utf-8')
+
+    return address
+
+def public_to_legacy_address(public_key: bytes, testnet: bool = False) -> str:
+    """Convert public key to legacy P2PKH address (starts with 1)"""
+    # This is the original public_to_address method
+    sha256_hash = hashlib.sha256(public_key).digest()
+    ripemd160_hash = hashlib.new('ripemd160')
+    ripemd160_hash.update(sha256_hash)
+    hash160 = ripemd160_hash.digest()
+
+    version = b'\x6f' if testnet else b'\x00'
+    versioned_hash = version + hash160
+    checksum = hashlib.sha256(hashlib.sha256(versioned_hash).digest()).digest()[:4]
+    binary_address = versioned_hash + checksum
+
+    return base58.b58encode(binary_address).decode('utf-8')
+
+def public_to_segwit_address(public_key: bytes, testnet: bool = False) -> str:
+    """Convert public key to P2SH-wrapped SegWit address (starts with 3)"""
+    # 1. Create the witness program
+    sha256_hash = hashlib.sha256(public_key).digest()
+    ripemd160_hash = hashlib.new('ripemd160')
+    ripemd160_hash.update(sha256_hash)
+    hash160 = ripemd160_hash.digest()
+
+    # 2. Create P2SH redeemScript
+    redeem_script = b'\x00\x14' + hash160  # 0x00 is witness version, 0x14 is push 20 bytes
+
+    # 3. Hash the redeemScript
+    sha256_hash = hashlib.sha256(redeem_script).digest()
+    ripemd160_hash = hashlib.new('ripemd160')
+    ripemd160_hash.update(sha256_hash)
+    script_hash = ripemd160_hash.digest()
+
+    # 4. Create P2SH address
+    version = b'\xc4' if testnet else b'\x05'
+    versioned_hash = version + script_hash
+    checksum = hashlib.sha256(hashlib.sha256(versioned_hash).digest()).digest()[:4]
+    binary_address = versioned_hash + checksum
+
+    return base58.b58encode(binary_address).decode('utf-8')
+
+def public_to_native_segwit_address_bech32(public_key: bytes, testnet: bool = False) -> str:
+    """
+    Convert public key to Native SegWit (bech32) address using bech32 library.
+    Returns address in format bc1... for mainnet or tb1... for testnet
+    """
+    # 1. Hash the public key (HASH160) HASH160(x) = RIPEMD160(SHA256(x))
+    sha256_hash = hashlib.sha256(public_key).digest()
+    ripemd160_hash = hashlib.new('ripemd160')
+    ripemd160_hash.update(sha256_hash)
+    hash160 = ripemd160_hash.digest()
+
+    # 2. Prepare parameters for bech32 encoding
+    witver = 0  # Witness version for P2WPKH
+    hrp = 'tb' if testnet else 'bc'  # Human-readable part
+
+    # 3. Convert 8-bit bytes to 5-bit integers
+    data = [witver] + list(hash160)
+    five_bit_data = bech32.convertbits(data, 8, 5)
+
+    # 4. Encode with bech32
+    address = bech32.bech32_encode(hrp, five_bit_data)
+
+    return address
+
+def verify_bech32_address(address: str) -> Tuple[bool, str, int, bytes]:
+    """
+    Verify a Bech32 address and decode its components.
+
+    Returns:
+        Tuple containing:
+        - bool: Whether address is valid
+        - str: Human-readable prefix ('bc' or 'tb')
+        - int: Witness version
+        - bytes: Witness program (pubkey hash)
+    """
+    try:
+        # Decode the address
+        hrp, data = bech32.bech32_decode(address)
+
+        # Check if decode was successful
+        if hrp is None or data is None:
+            return False, "", 0, b""
+
+        # Convert from 5-bit to 8-bit
+        decoded_data = bech32.convertbits(data[1:], 5, 8, False)
+        if decoded_data is None:
+            return False, "", 0, b""
+
+        # Check valid prefix
+        if hrp not in ['bc', 'tb']:
+            return False, "", 0, b""
+
+        # Check witness version
+        witness_version = data[0]
+        if witness_version > 16:
+            return False, "", 0, b""
+
+        # Check program length for v0
+        if witness_version == 0 and len(decoded_data) != 20 and len(decoded_data) != 32:
+            return False, "", 0, b""
+
+        return True, hrp, witness_version, bytes(decoded_data)
+
+    except Exception:
+        return False, "", 0, b""
+
+def demonstrate_bech32_addresses():
+    """Demonstrate generation and verification of Bech32 addresses"""
+    bitcoin_keys = BitcoinKeys()
+
+    # Generate keys
+    private_key = bitcoin_keys.generate_private_key()
+    public_key = bitcoin_keys.private_to_public(private_key)
+
+    # Generate addresses using different methods
+    address1 = public_to_native_segwit_address_bech32(public_key)
+
+    print("\nBech32 Address Generation:")
+    print(f"Using bech32 library:    {address1}")
+
+    # Verify addresses
+    valid, hrp, witver, witprog = verify_bech32_address(address1)
+
+    print("\nAddress Verification:")
+    print(f"Valid:            {valid}")
+    print(f"Network:          {'Mainnet' if hrp == 'bc' else 'Testnet'}")
+    print(f"Witness Version:  {witver}")
+    print(f"Witness Program:  {witprog.hex()}")
+
+    # Test with some example addresses
+    test_addresses = [
+        "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",  # Valid mainnet
+        "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",  # Valid testnet
+        "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t5",  # Invalid checksum
+        "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3"  # Invalid length
+    ]
+
+    print("\nTesting Various Addresses:")
+    for addr in test_addresses:
+        valid, hrp, witver, witprog = verify_bech32_address(addr)
+        print(f"\nAddress: {addr}")
+        print(f"Valid: {valid}")
+        if valid:
+            print(f"Network: {'Mainnet' if hrp == 'bc' else 'Testnet'}")
+            print(f"Witness Version: {witver}")
+            print(f"Witness Program: {witprog.hex()}")
 
 def demonstrate_bitcoin_keys():
     # Create Bitcoin keys
@@ -302,8 +446,8 @@ def demonstrate_bitcoin_keys():
     print(f"Public Key (hex): {public_key.hex()}")
 
     # Generate Bitcoin address
-    address = bitcoin_keys.public_to_address(public_key)
-    testnet_address = bitcoin_keys.public_to_address(public_key, testnet=True)
+    address = public_to_address(public_key)
+    testnet_address = public_to_address(public_key, testnet=True)
     print(f"Bitcoin Address (mainnet): {address}")
     print(f"Bitcoin Address (testnet): {testnet_address}")
 
@@ -321,10 +465,10 @@ def demonstrate_bitcoin_keys():
     for path in paths:
         private_key, chain_code = wallet.derive_path(path)
         public_key = bitcoin_keys.private_to_public(private_key)
-        address = bitcoin_keys.public_to_address(public_key)
+        address = public_to_address(public_key)
         print(f"\nPath: {path}")
         print(f"Address: {address}")
 
-
 if __name__ == "__main__":
     demonstrate_bitcoin_keys()
+    demonstrate_bech32_addresses()
