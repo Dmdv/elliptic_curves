@@ -1,3 +1,5 @@
+from DoubleAndAdd import DoubleAndAdd
+
 
 class MontgomeryLadder:
     """
